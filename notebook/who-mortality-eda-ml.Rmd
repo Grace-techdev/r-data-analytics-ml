@@ -1,0 +1,2294 @@
+---
+title: "Exploratory Data Analytics & Predictive Modelling (R)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## Project Links
+
+- YouTube demo: https://youtu.be/Ba1ZMSYzM7Y  
+
+## 1 Introduction
+
+This project analyses the **WHO “Countries and Death Cause”** dataset, which contains approximately 30 years of mortality and risk-factor data across multiple countries.
+
+The workflow includes:
+- Exploratory data analysis (EDA) to understand distributions, trends, and missingness
+- Predictive modelling (e.g., Decision Tree, K-Nearest Neighbors) to classify countries into high vs. low death-rate groups using selected risk factors
+- Clustering to identify groups of countries with similar mortality patterns
+
+The project demonstrates an end-to-end analytics and modelling pipeline in R, with a focus on producing interpretable results that could support data-driven public health insights.
+
+## 2 Exploratory Data Analysis EDA
+
+### 2.1 Explore the Data
+
+#### 2.1.1 Set Up
+
+**Load Packages**
+
+Load the necessary libraries for data manipulation, visualization, and
+machine learning models.
+
+```{r}
+library(ggplot2)
+library(pander)
+library(knitr)
+library(dplyr)
+library(countrycode)
+library(rpart)
+library(rpart.plot)
+library('ROCR')
+library(tidyverse)
+library(kableExtra)
+library(skimr)
+library(ROCit)
+library(gridExtra)
+library('class')
+library(fpc)
+library(PerformanceAnalytics)
+library(corrplot)
+library(RColorBrewer)
+library(lime)
+library(caret)
+library('grDevices')
+```
+
+**Visual setting**
+
+Apply color palettes from the `RColorBrewer` package to enchance
+visualization.
+
+```{r eval = FALSE}
+cols = brewer.pal(n = 8, name = "Dark2")
+```
+
+```{r}
+plot_theme <- function() {
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", margin = margin(b = 25)),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.75),
+    panel.grid.major = element_line(color = "grey", linetype = "dashed", size = 0.2),
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(),  
+    plot.margin = margin(t = 20, r = 20, b = 15, l = 20),
+    axis.ticks.length = unit(7, "pt"),  
+    axis.text = element_text(size = 11), 
+    axis.title = element_text(size = 12),  
+    axis.title.x = element_text(margin = margin(t = 14)),  
+    axis.title.y = element_text(margin = margin(r = 14))   #
+  )
+}
+```
+
+#### 2.1.2 Import Datasets
+
+Load the death data, population and GDP data.
+
+```{r}
+data_dir <- "../data/raw"
+df_death <- read.csv(file.path(data_dir, "Countries and death causes.csv"), header = TRUE)
+df_pop   <- read.csv(file.path(data_dir, "API_SP.POP.TOTL_DS2_en_csv_v2_31753.csv"), skip = 4, header = TRUE)
+df_gdp   <- read.csv(file.path(data_dir, "API_NY.GDP.PCAP.CD_DS2_en_csv_v2_31681.csv"), skip = 4, header = TRUE)
+```
+
+1.  **Death Data**: The death data used in this project was collected
+    from the World Health Organization (WHO), which provides yearly
+    death counts across 228 entities from 1990 to 2019, including
+    various causes of death (World Health Organization, n.d.)
+    (**Provided in Project Instruction**).
+
+2.  **Population Data**: The population data was sourced from the World
+    Bank, providing total population figures for each country (World
+    Bank, n.d.) [(Population
+    Data)](https://data.worldbank.org/indicator/SP.POP.TOTL).
+
+3.  **GDP Data**: GDP data was also obtained from the World Bank,
+    representing GDP per capita (current US\$) as an indicator of the
+    economic status of each country (World Bank, n.d.) [(GDP
+    Data)](https://data.worldbank.org/indicator/NY.GDP.PCAP.CD).
+
+#### 2.1.3 Data Overview
+
+This section explores the structure and types of variables in the
+`df_death` dataset, which is essential for guiding the subsequent data
+handling steps.
+
+**Data Structure and Types**
+
+The first step is to observe the first few rows, examine the data
+structure and review the summary.
+
+```{r}
+cat("Dataset size is", dim(df_death))
+```
+
+```{r}
+head(df_death) %>% knitr::kable() %>% kable_styling(font_size = 12, bootstrap_options = "basic", full_width = FALSE) %>% scroll_box(height = "50%", width = "100%")
+```
+
+```{r}
+# to understand the data types of each variable
+# str(df_death) 
+summary(df_death) %>% knitr::kable() %>% kable_styling(font_size = 12, bootstrap_options = "basic", full_width = FALSE) %>% scroll_box(width = "100%")
+```
+
+**Summary statistics**
+
+The `skimr` package provives concise summaries of each variable,
+highlighting aspects such as missing values and data distribution
+[Waring et al., 2022].
+
+```{r}
+skim(df_death) %>% knitr::kable() %>% kable_styling(font_size = 12, bootstrap_options = "basic", full_width = FALSE) %>% scroll_box(height = "400px", width = "100%")
+```
+
+**Conclusion**
+
+The death data contains 6,840 observations of 31 variables. The two are
+**categorical** variables:
+
+-   **Entity**: represents countries and organisations with 228 unique
+    entities. Each has 30 rows (data spanning from 1990 - 2019),
+    ensuring a complete coverage for all entities. The variable 'Entity'
+    will be renamed to 'Country'.
+
+-   **Code**: represents country codes. There are **690 rows** where the
+    Code is **missing**, and 30 entities have non-standard codes (do not
+    have exact three characters), typically indicating organizations or
+    groups of countries. These rows will be removed in the cleaning
+    step.
+
+For the **numerical** variables:
+
+-   **Year**: currently stored as an integer, it will be treated as a
+    categorical variable to represent different time periods.
+
+-   **28 death-related variables:** shows typical data issues such as
+    invalid values and wide data range. For example, `Alcohol.Use`,
+    ranges from 0 to 2,441,973, suggesting potential inconsistencies.
+    The minimum value 0 might be valid for some countries. However, it
+    could also represent missing data that was not recorded. Outliers
+    may be associated to countries with large populations or aggregated
+    country groups.
+
+```{r}
+# invalid country codes
+nrow(df_death[nchar(df_death$Code) !=0 & nchar(df_death$Code) != 3, ])
+```
+
+#### 2.1.4 Merging Data
+
+Integrating population and GDP data with death data is important for
+comprehensive analysis. The population and GDP datasets cover yearly
+data for each country from 1990 to 2019, which aligns with the periods
+available in the death data.
+
+**Data Overview**
+
+**GDP indicator:** GDP is measured per capita in current US dollars.
+
+```{r}
+# initial check
+# head(df_pop) %>% knitr::kable()
+# head(df_gdp) %>% knitr::kable()
+# str(df_pop) %>% knitr::kable()
+# str(df_gdp) %>% knitr::kable()
+# summary(df_pop) %>% knitr::kable()
+# summary(df_gdp) %>% knitr::kable()
+```
+
+**Data Preparation**
+
+First, subset the population and GDP data for the years 1990 to 2019 and
+rename the columns for merging. The tidyr package was used to
+restructure the data for merging, utilizing the pivot_longer() function
+to transform wide data into a long format (Wickham, 2020).
+
+```{r}
+# subset and rename columns
+df_pop <- subset(df_pop, select = c(Country.Code, X1990:X2019))
+colnames(df_pop) <- c('Code', as.character(1990:2019))
+
+df_gdp <- subset(df_gdp, select = c(Country.Code, X1990:X2019))
+colnames(df_gdp) <- c('Code', as.character(1990:2019))
+
+# reshape to long format
+df_pop_long <- tidyr::pivot_longer(df_pop, cols = -Code, names_to = "Year", values_to = "Population")
+df_pop_long$Year <- as.integer(df_pop_long$Year)
+df_gdp_long <- tidyr::pivot_longer(df_gdp, cols = -Code, names_to = "Year", values_to = "GDP")
+df_gdp_long$Year <- as.integer(df_gdp_long$Year)
+```
+
+**Data Merging**
+
+Merge population and GDP data first, then combine the result with the
+death data.
+
+```{r}
+# merge population and GDP
+df_pop_gdp <- dplyr::left_join(df_pop_long, df_gdp_long, by = c("Code", "Year"))
+# merge death_country and pop.gdp
+df_merged <- dplyr::left_join(df_death, df_pop_gdp, by = c("Code", "Year"))
+```
+
+### 2.2 Data Preparation
+
+#### 2.2.1 Pre-visual Analysis
+
+Visualization is a critical step in data analysis, helping to identify
+underlying patterns, identify outliers, and help with the next step of
+data cleaning and transformation. This section uses different types of
+plots and charts in an iterative process, and use visualization before
+and after data cleaning.
+
+**Single Variable Analysis**
+
+First step is to explore **variation** within different variables,
+including their **Distribution, outliers.**
+
+This section starts with variable `"Smoking"` as a example to explore
+the overall distribution, outliers and range. Smoking is a significant
+health concern globally and a leading cause of death in many countries.
+
+**Histogram**
+
+```{r fig.width=10, fig.height=5}
+
+# histogram to explore distribution
+p1 <- ggplot(df_merged, aes(x = Smoking)) +
+  geom_histogram(binwidth = 50000, fill = "#1B9E77") +
+  ggtitle("Histogram of Smoking") +
+  xlab("Smoking") +
+  ylab("Count") +
+  plot_theme()
+
+# log transformation to reduce skewness
+x <- log(df_merged$Smoking + 1)
+p2 <- ggplot(df_merged, aes(x = x)) +
+  geom_histogram(binwidth = 1, fill = "#1B9E77", color = "white") +
+  ggtitle("Histogram of Log Smoking") +
+  xlab("Log Smoking") +
+  ylab("Count") +
+  plot_theme()
+
+grid.arrange(p1,p2, ncol = 2)
+```
+
+The histograms reveal a right-skewed distribution. A **Log
+transformation** can help reduce this skewness. Several countries, such
+as small countries and islands, have fewer than 15 deaths.
+
+```{r}
+unique(df_merged[df_merged$Smoking < 15, "Entity"]) 
+```
+
+Meanwhile, countries with large population, such as China and India,
+have more than 900,000 deaths due to smoking. This pattern is also found
+in large groups of countries, such as European Region.
+
+```{r}
+unique(df_merged[df_merged$Smoking >900000, "Entity"])
+```
+
+Insights for distinguishing countries:
+
+-   **Population size**: a key factor for calculating death rates. It
+    allows for more comparable analysis across countries
+
+-   **GDP**: economic factors can help identify how the income levels
+    affect health outcomes
+
+-   **Geographical impact**: the continent or region may influence
+    health conditions
+
+**Boxplots**
+
+```{r fig.width=10, fig.height=5}
+
+# boxplots 
+p3 <- ggplot(df_merged, aes(x = "", y = Smoking)) +
+  geom_boxplot(fill = "#1B9E77",outlier.colour = "#D95F02") + ggtitle("Boxplot of Smoking") +
+  plot_theme()
+
+# log transformation
+y4 <- log(df_merged$Smoking)
+p4 <- ggplot(df_merged, aes(x = "", y = y4)) +
+  geom_boxplot(fill = "#1B9E77",outlier.colour = "#D95F02") + 
+  ggtitle("Boxplot of Log Smoking") +
+  plot_theme()
+
+grid.arrange(p3,p4, ncol = 2)
+```
+
+The boxplots confirms the effect of log transformation. The original box
+plot shows a wide range of outliers, due to concentration of data in low
+range. The log transformation significantly reduce the effect of
+outliers and make it more centralized.
+
+**Select dietary factors**: For `"Diet.low.in.fruits"` and
+`"Diet.high.in.sodium"`. They have similar distribution after log
+transformation. Both of them shows several outliers, even after
+transformation.
+
+```{r fig.width=10, fig.height=5}
+
+# boxplots for Diet.low.in.fruits
+y5 <- log(df_merged$Diet.low.in.fruits)
+p5 <- ggplot(df_merged, aes(x = "", y = y5)) +
+  geom_boxplot(fill = "#1B9E77",outlier.colour = "#D95F02") +
+  ggtitle("Boxplot of Log Diet.low.in.fruits") + 
+  plot_theme()
+
+# boxplots for Diet.high.in.sodium
+y6 <- log(df_merged$Diet.high.in.sodium)
+p6 <- ggplot(df_merged, aes(x = "", y = y6)) +
+  geom_boxplot(fill = "#1B9E77",outlier.colour = "#D95F02") +
+  ggtitle("Boxplot of Log Diet.high.in.sodium") +
+  plot_theme()
+
+grid.arrange(p5,p6, ncol = 2)
+```
+
+**Density Plot**
+
+```{r fig.width=10, fig.height=5}
+
+# density plot for unsafe water source
+p7 <- ggplot(df_merged, aes(x = Unsafe.water.source)) +
+  geom_histogram(aes(y = ..density..), binwidth = 50000, fill = "#1B9E77", alpha = 0.4, color = "white" ) +
+  geom_density(color = "#1B9E77", fill = "#1B9E77", alpha = 0.4, size = 1) +
+  ggtitle("Density Plot of Unsafe.water.source") +
+  xlab("Unsafe.water.source") +
+  ylab("Density") +
+  plot_theme()
+
+# log
+x8 <- log(df_merged$Unsafe.water.source)
+p8 <- ggplot(df_merged, aes(x = x8)) +
+  geom_histogram(aes(y = ..density..), binwidth = 1, fill = "#1B9E77", alpha = 0.4, color = "white" ) +
+  geom_density(color = "#1B9E77", fill = "#1B9E77", alpha = 0.3, size = 1) +
+  ggtitle("Density Plot of Log Unsafe.water.source") +
+  xlab("Log Unsafe.water.source") +
+  ylab("Density") +
+  plot_theme()
+
+grid.arrange(p7,p8, ncol = 2)
+
+```
+
+The density plot of `"Unsafe.water.source"` shows an extremely skewed
+distribution with majority of observations concentrated near small
+values. This skewness indicates that most regions record low levels,
+while a few with significantly high levels.
+
+**Outlier analysis**
+
+After the log transformation, the distribution of
+`"Unsafe.water.source"` becomes more normalized than before, but still
+shows 421 outliers, indicating that some regions are disproportionately
+affected by unsafe water sources.
+
+```{r}
+boxplot.stats(df_merged$Unsafe.water.source)$stats
+length(boxplot.stats(df_merged$Unsafe.water.source)$out)
+
+# after transformation
+boxplot.stats(x8)$stats
+length(boxplot.stats(x8)$out)
+```
+
+**Multiple Variables Analysis**
+
+Next is to explore **covariation** between different variables by
+scatterplots and correlation analysis.
+
+**Scatterplots**
+
+```{r fig.width=10, fig.height=10}
+chart.Correlation(df_merged[, -c(1:3)], histogram=TRUE)
+```
+
+The above scatter matrix shows the relationships between pairs of
+cause-related variables. There are strong positive correlations among
+several variables. Some scatterplots reveal clusters and outliers. It may
+indicate the difference between certain group of countries.
+
+**Correlation matrix**
+
+```{r fig.width=10, fig.height=10}
+cor_matrix <- cor(df_merged[, -c(1:3)], use = "pairwise.complete.obs")
+corrplot(cor_matrix, method = "color",type = "full",order = "hclust",tl.col = "black",tl.srt = 90,tl.cex = 0.6, number.cex = 0.5,cl.cex = 1.2,addCoef.col = "black")
+```
+
+High correlations are found among similar cause-related variables. For
+example, dietary factors such as `"Diet.low.infruit"`,
+`"Diet.high.in.sodium"`, and "Diet.low.in.vegetables" show strong
+correlations, suggesting their similar influences and allowing them to
+be grouped together as a common "Diet" category. A similar pattern can
+be found in "Unsafe.water.source" and "Unsafe.sanitation", indicating a
+potential grouping related to water and environmental factors. This can
+help to reduce variable redundancy and guide the feature selection for
+machine learning models.
+
+#### 2.2.2 Data Cleaning
+
+**Remove invalid country codes**
+
+Drop organization entities and invalid **country codes**, such as
+regions or non-country entities. The purpose of this project is to focus
+on country-level data.
+
+```{r}
+df_clean <- df_merged %>% 
+  filter(!is.na(Code) & Code != "") %>%
+  filter(nchar(Code) == 3)
+```
+
+**Rename columns:** To improve consistency, "Entity" is renamed to
+`"Country"`. A type in the column name `"Alochol.use"` is corrected.
+
+```{r}
+df_clean <- df_clean %>% 
+  rename(Country = Entity) %>% 
+  rename(Alcohol.use = Alochol.use)
+```
+
+**Continent**: The `countrycode` package is used to add a "Continent"
+column, indicating the continent each country belongs to. This addition
+helps in examining geographic effects on death rates (Arel-Bundock et
+al., 2023). Missing continent value is manually corrected.
+
+```{r}
+df_clean$Continent = countrycode(as.character(df_clean$Country), "country.name","continent")
+# missing value
+df_clean <- df_clean %>%
+  mutate(
+    Continent = ifelse(Code == 'FSM', 'Oceania', Continent)
+  ) %>% as.data.frame()
+```
+
+**Year**: Converted to a categorical variable.
+
+```{r}
+df_clean$Year <- factor(df_clean$Year)
+# str(df_clean)
+```
+
+**Handling missing data**
+
+-   **Population**: To ensure population information is complete, remove
+    any rows with missing data
+
+-   **GDP**
+
+    -   **Impute missing values:** if a country has missing GDP data for
+        certain years, these values are replaced with the median GDP for
+        that country.
+
+    -   If GDP data is missing for all years, that country is removed
+
+```{r}
+# drop rows with missing population data
+df_clean <- df_clean %>%
+  filter(!is.na(Population)) 
+
+# impute missing GDP value 
+df_clean <- df_clean %>%
+  group_by(Code) %>%
+  mutate(GDP = ifelse(is.na(GDP), median(GDP, na.rm = TRUE), GDP)) %>%
+  ungroup() 
+
+# drop rows with missing GDP for all years
+df_clean <- df_clean %>%
+  filter(!is.na(GDP)) 
+```
+
+### 2.3 Literature Review
+
+#### 2.3.1 IHME Literature Review
+
+This feature selection process is guided by **Global Burden of Disease
+(GBD)** studied by the **Institute for Health Metrics and Evaluation
+(IHME)**. The GBD study provides a comprehensive evaluation of global
+health trends and includes factors that contribute to deaths across a
+wide range of causes (IHME, Global Burden of Disease, 2024).
+
+The death dataset contains **28 risk factors**, categorized in detail
+according to GBD's Level3 and Level4 classification. To simplify these
+features, they were mapped into IHME's three-level framework.
+
+```{r}
+col = brewer.pal(n = 3, name = "Dark2")
+
+risk_factors <- data.frame(
+  Level1 = c(rep("Behavioral", 11), rep("Environmental", 2), rep("Metabolic", 4)),
+  Level2 = c("", "", "", "Iron.deficiency","Vitamin.A.deficiency", "Drug.use",
+             "Alcohol.use","Unsafe.sex","Low.physical.activity","","", "","Air.pollution",
+             "High.systolic.blood.pressure", "High.fasting.plasma.glucose", 
+             "High.body.mass.index", "Low.bone.mineral.density"),
+  Level3 = c("No.exclusive.breastfeeding, Discontinued.breastfeeding", 
+             "Child.wasting, Child .stunting", "Low.birth.weight","", "", "", "", "", "", "Smoking, Secondhand.smoke", "Diet.high.in.sodium, Diet.low.in.whole.grains,
+             Diet.low.in.fruits, Diet.low.in.nuts.and.seeds, Diet.low.in.vegetables", 
+             "No.access.to.handwashing.facility, Unsafe.water.source, Unsafe.sanitation", 
+             "Household.air.pollution.from.solid.fuels, Outdoor.air.pollution","","","","")
+)
+
+kable(risk_factors, "html", escape = FALSE) %>% kable_styling(font_size = 12, bootstrap_options = "basic", full_width = FALSE) %>% scroll_box(height = "50%", width = "100%") %>%
+  row_spec(0, bold = T, color = "black") %>%
+  row_spec(which(risk_factors$Level1 == "Behavioral"), bold = T, color = col) %>%
+  row_spec(which(risk_factors$Level1 == "Environmental"), bold = T, color = col[3]) %>%
+  row_spec(which(risk_factors$Level1 == "Metabolic"), bold = T, color =col[2])
+```
+
+#### 2.3.2 Correlation Analysis
+
+From the correlation analysis, it was evident that many of the original
+variables have high correlations with each other. This supports the
+feature selection and grouping process.
+
+**High correlations** among similar cause-related variables
+
+-   **Diet**: `"Diet.low.in.fruits"`, `"Diet.high.in.sodium"`,
+    `"Diet.low.in.vegetables"`, `"Diet.low.in.nuts.and.seeds"`, and
+    `"Diet.low.in.whole.grains"` have strong correlations, with
+    coefficients from 0.81 to 0.92. This can be grouped under "Dietary"
+    Category.
+
+```{r fig.width=3, fig.height=3}
+chart.Correlation(df_clean[, c("Diet.high.in.sodium","Diet.low.in.whole.grains", "Diet.low.in.fruits","Diet.low.in.nuts.and.seeds", "Diet.low.in.Vegetables")], histogram=TRUE)
+```
+
+Unsafe.water
+
+-   **Unsafe.water**: `"No.access.to.handwashing.facility"`,
+    `"Unsafe.water.source"` and `"Unsafe.sanitation"` have perfect
+    correlations, with coefficients from 0.99 to 1. This can be grouped
+    under "Unsafe.water" Category.
+
+```{r fig.width=3, fig.height=3}
+chart.Correlation(df_clean[, c("No.access.to.handwashing.facility","Unsafe.water.source", "Unsafe.sanitation")], histogram=TRUE)
+```
+
+**Breastfeeding**: `"Non.exclusive.breastfeeding"` and
+`"Discontinued.breastfeeding"` have a high correlation of 0.95. This can
+be grouped under "Breastfeeding" Category.
+
+```{r fig.width=3, fig.height=3}
+chart.Correlation(df_clean[, c("Non.exclusive.breastfeeding", "Discontinued.breastfeeding")], histogram=TRUE)
+```
+
+**Tobacco**: `"Smoking"` and `"Secondhand.smoke"` have a high
+correlation of 0.98. This can be grouped under "Tobacco" Category.
+
+```{r fig.width=3, fig.height=3}
+chart.Correlation(df_clean[, c("Smoking", "Secondhand.smoke")], histogram=TRUE)
+```
+
+**Child.growth**: `"Child.wasting"` and `"Child.stunting"` have a high
+correlation of 0.98. This can be grouped under "Child.growth:" Category.
+
+```{r fig.width=3, fig.height=3}
+chart.Correlation(df_clean[,  c("Child.wasting", "Child.stunting")], histogram=TRUE)
+```
+
+The high correlation indicates potential redundancy. This process is to
+reduce redundancy and prepare a more focused dataset for later machine
+learning model.
+
+**Levels Explanation**:
+
+-   **Level1**: include broad categories including **Behavioral**,
+    **Environmental,** and **Metabolic** groups. It aligns IHME's
+    highest classification level and helps to identify the major types
+    of influences.
+
+-   **Level2**: contains **17 risk factors**. Level 3 variables that
+    have similar influences or are highly correlated could be merged
+    into Level2 groups. This step plays a significant role in reducing
+    the number of features while maintaining meaningful information.
+
+-   **Level 3**: contains **27 factors** ("Air.pollution" is removed due
+    to its redundancy)
+
+#### 2.3.3 Feature Reduction
+
+1.  Remove "`Air.pollution"`
+
+    It was redundant as it represents as combined data of the
+    `Household.air.pollution.from.solid.fuels` and
+    `Outdoor.air.pollution`
+
+```{r}
+causesVar <- colnames(df_clean)[4:31] 
+# Level 3
+df_new <- df_clean[,!names(df_clean) %in% "Air.pollution" ]
+
+```
+
+2.  Aggregation of related variables
+
+```{r}
+# combined into new variables
+df_new_1 <- df_new %>%
+  mutate(
+    Breastfeeding = (Non.exclusive.breastfeeding + Discontinued.breastfeeding),
+    Child.growth = (Child.wasting + Child.stunting),
+    Tobacco = (Smoking + Secondhand.smoke),
+    Dietary = (Diet.high.in.sodium + Diet.low.in.whole.grains + Diet.low.in.fruits + 
+                 Diet.low.in.nuts.and.seeds + Diet.low.in.Vegetables),
+    Unsafe.water = (No.access.to.handwashing.facility + Unsafe.water.source + 
+                      Unsafe.sanitation),
+    Air.pollution = (Household.air.pollution.from.solid.fuels + Outdoor.air.pollution))
+
+# after aggregation, individual variables were removed
+df_new_1 <- subset(df_new_1, select = -c(Non.exclusive.breastfeeding,Discontinued.breastfeeding, Child.wasting, Child.stunting, Smoking, Secondhand.smoke, Diet.high.in.sodium, Diet.low.in.whole.grains, Diet.low.in.fruits, Diet.low.in.nuts.and.seeds, Diet.low.in.Vegetables,No.access.to.handwashing.facility, Unsafe.water.source, Unsafe.sanitation, Household.air.pollution.from.solid.fuels, Outdoor.air.pollution ))
+
+```
+
+3.  Convert to long format and add category labels
+
+```{r}
+# convert to long format
+df_long <- pivot_longer(df_clean,cols = causesVar,names_to = "Level3",values_to = "Deaths")
+causesVar <- causesVar[causesVar != "Air.pollution"] # remove Air.pollution
+
+df_long$Level2 <- factor(df_long$Level3) 
+levels(df_long$Level2) <- list(
+  "Breastfeeding" = c("Non.exclusive.breastfeeding", "Discontinued.breastfeeding"),
+  "Child.growth" = c("Child.wasting", "Child.stunting"),
+  "Low.birth.weight" = "Low.birth.weight",
+  "Iron.deficiency" = "Iron.deficiency", 
+  "Vitamin.A.deficiency" = "Vitamin.A.deficiency",
+  "Drug.use" = "Drug.use",
+  "Alcohol.use" =  "Alcohol.use",
+  "Unsafe.sex" = "Unsafe.sex",
+  "Low.physical.activity" = "Low.physical.activity",
+  "Tobacco" = c("Smoking", "Secondhand.smoke"),
+  "Dietary" = c("Diet.high.in.sodium","Diet.low.in.whole.grains", "Diet.low.in.fruits","Diet.low.in.nuts.and.seeds", "Diet.low.in.Vegetables"),
+  "Unsafe.water" =  c("No.access.to.handwashing.facility","Unsafe.water.source", "Unsafe.sanitation"),
+  "Air.pollution" = c("Household.air.pollution.from.solid.fuels", "Outdoor.air.pollution"), 
+  # Air.pollution: NA (ignore)
+  "High.systolic.blood.pressure" = "High.systolic.blood.pressure",
+  "High.fasting.plasma.glucose" = "High.fasting.plasma.glucose",
+  "High.body.mass.index" = "High.body.mass.index",
+  "Low.bone.mineral.density" = "Low.bone.mineral.density"
+)
+
+df_long$Level1 <- factor(df_long$Level2) 
+levels(df_long$Level1) <- list(
+  "Behavioral" = c("Breastfeeding", "Child.growth","Low.birth.weight","Iron.deficiency",
+  "Vitamin.A.deficiency", "Drug.use", "Alcohol.use", "Unsafe.sex", "Low.physical.activity",
+  "Tobacco", "Dietary"),
+  "Environmental" = c("Unsafe.water", "Air.pollution"),
+  "Metabolic" = c("High.systolic.blood.pressure", "High.fasting.plasma.glucose", "High.body.mass.index", "Low.bone.mineral.density")
+)
+df_long <- df_long[df_long$Level3 != "Air.pollution", ]
+```
+
+### 2.4 Data Transformation
+
+#### 2.4.1 Create New Variables
+
+**Death Rate**: calculated for each country and year, based on total
+deaths (sum from the causes) divided by the population
+
+```{r}
+factors <- colnames(df_new_1)[!colnames(df_new_1) %in% c("Country", "Code", "Year","GDP", "Population","Continent")]
+df_new_1$Total_Deaths <- rowSums(df_new_1[, factors])
+df_new_1 <- df_new_1 %>%
+  mutate(Death_Rate = (Total_Deaths / Population) * 100000)
+```
+
+**Death Rate Normalized**: calculated as the death rate divided by GDP.
+It is used to adjust the death rate by each country's economic status.
+
+```{r}
+df_new_1 <- df_new_1 %>%
+  mutate(Death_Rate_Normalized = Death_Rate / GDP)
+```
+
+#### 2.4.2 Data Transformation
+
+**Log transformation**
+
+Due to the high skewness of deaths found in visual analysis (histograms
+and boxplots). Log transformation was appied to reduce the skewness and
+improve data normality.
+
+```{r}
+log_trans <- function(df, vars) {
+  for (var in vars) {
+    df[,var]  <- log(df[,var] + 1)
+  }
+  return(df)
+}
+df_new_log <- log_trans(df_new_1, factors)
+```
+
+**Scaling**
+
+After log transformation, these feature variables were scaled to
+standardize to ensure compatibility for machine learning models.
+
+```{r}
+df_new_2_scaled <- as.data.frame(scale(df_new_log[, factors]))
+df_new_2 <- cbind(df_new_log[, setdiff(names(df_new_log), factors)], df_new_2_scaled )
+```
+
+```{r}
+processed_dir <- "../data/processed"
+
+# ensure directory exists
+dir.create(processed_dir, recursive = TRUE, showWarnings = FALSE)
+
+write.csv(
+  df_long,
+  file.path(processed_dir, "death_long.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  df_new_1,
+  file.path(processed_dir, "death_original.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  df_new_log,
+  file.path(processed_dir, "death_log.csv"),
+  row.names = FALSE
+)
+```
+
+### 2.5 EDA Visualization
+
+This section selects several key plots from Shiny app to highlight
+important findings. Please refer to the Shiny app for more comprehensive
+visualizations.
+
+The datasets used in this section were prepared for the accompanying Shiny application and are reused here for static visualization.
+
+#### 2.5.1 Country Analysis
+
+```{r fig.width=12, fig.height=5}
+format_numbers <- function(num) {
+  sapply(num, function(x) {
+    if (x >= 1e9) {
+      paste(format(round(x / 1e9, 2), nsmall = 2), "B")
+    } else if (x >= 1e6) {
+      paste(format(round(x / 1e6, 2), nsmall = 2), "M")
+    } else if (x >= 1e3) {
+      paste(format(round(x / 1e3, 2), nsmall = 2), "K")
+    } else {
+      as.character(x)
+    }
+  })
+}
+df_shiny <- read.csv(file.path(processed_dir, "dShiny.csv"))
+df_shiny$Year <- factor(df_shiny$Year)
+
+df_shiny_long <- read.csv(file.path(processed_dir, "dShiny_long.csv"))
+df_shiny_long$Year <- factor(df_shiny_long$Year)
+
+# bar Plot for Total Deaths by Country
+cols <- c("Africa" = "#1B9E77", "Europe" = "#7570B3", "Asia" = "#D95F02", 
+          "Americas" = "#E7298A", "Oceania" = "#66A61E")
+df_plot_1 <- aggregate(df_shiny[, "Total_Deaths"], by = list(df_shiny[, "Country"]), FUN = sum)
+names(df_plot_1) <- c("Country", "Total_Deaths")
+df_plot_1 <- df_plot_1 %>%
+  left_join(df_shiny %>% distinct(Country, Continent), by = c("Country" = "Country"))
+df_plot_1 <- df_plot_1[order(-df_plot_1$Total_Deaths), ]
+          df_plot_1 <- head(df_plot_1, 20)
+
+p9 <- ggplot(df_plot_1, aes(x = reorder(Country, Total_Deaths), y = Total_Deaths, fill = Continent)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = cols) +
+  labs(title = "Total Deaths by Country", x = "", y = "Total Deaths", fill = "Continent") +
+  geom_text(aes(label = format_numbers(Total_Deaths)), hjust = -0.1, size = 3) +
+  scale_y_continuous(limits = c(0, max(df_plot_1$Total_Deaths) * 1.2)) + 
+  plot_theme() +
+  theme(legend.position = "bottom")
+
+df_plot_2 <- aggregate(df_shiny[, "Death_Rate"], by = list(df_shiny[, "Country"]), FUN = sum)
+names(df_plot_2) <- c("Country", "Death_Rate")
+df_plot_2 <- df_plot_2 %>%
+  left_join(df_shiny %>% distinct(Country, Continent), by = c("Country" = "Country"))
+df_plot_2 <- df_plot_2[order(-df_plot_2$Death_Rate), ]
+          df_plot_2 <- head(df_plot_2, 20)
+
+p10 <- ggplot(df_plot_2, aes(x = reorder(Country, Death_Rate), y = Death_Rate, fill = Continent)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = cols) +
+  labs(title = "Total Deaths by Country", x = "", y = "Death_Rate", fill = "Continent") +
+  geom_text(aes(label = format_numbers(Death_Rate)), hjust = -0.1, size = 3) +
+  scale_y_continuous(limits = c(0, max(df_plot_2$Death_Rate) * 1.2)) + 
+  plot_theme() +
+  theme(legend.position = "bottom")
+
+grid.arrange(p9, p10, ncol=2)
+```
+
+**Bar Plot of Total Deaths by Country**: shows the top 20 countries with
+the highest total deaths. China and India have the most deaths,
+primarily due to their large populations. Asian countries are highly
+represented in the top ranks.
+
+**Bar Plot of Death Rate by Country**: shows the death rate for the top
+20 countries. Unlike total deaths, the highest death rates are observed
+in European countries. This indicates that high death rates are not only
+due to population size but also other contributing factors.
+
+```{r fig.width=12, fig.height=5}
+df_plot_3 <- df_shiny
+p11 <- ggplot(df_plot_3, aes(x = Continent, y = Total_Deaths, fill = Continent)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(title = paste("Total_Deaths by Continent"),x = "", y = "Total_Deaths") +
+  plot_theme() +
+  theme(legend.position = "bottom")
+
+df_plot_4 <- df_shiny
+df_plot_4$Total_Deaths <- log(df_plot_4$Total_Deaths)
+p12 <- ggplot(df_plot_4, aes(x = Continent, y = Total_Deaths, fill = Continent)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(title = paste("Total_Deaths by Continent"),x = "", y = "Total_Deaths") +
+  plot_theme() +
+  theme(legend.position = "bottom") 
+
+grid.arrange(p11, p12, ncol=2)
+```
+
+**Box Plot of Total Deaths by Continent**: shows the distribution of
+total deaths by continent. Asia shows a wide range with many outliers,
+which reflects countries like China and India having extremely high
+numbers of deaths compared to other countries.
+
+**Box Plot of Total Deaths by Continent(Log Transformed)**: After log
+transformation, the outliers become less obvious, and the data is more
+centralized.
+
+#### 2.5.2 Cause Analysis
+
+```{r fig.width=12, fig.height=5}
+df_plot_5 <- df_shiny_long
+cols <- c("Behavioral" = "#1B9E77", "Environmental" = "#7570B3", "Metabolic" = "#D95F02")
+df_plot_5 <- aggregate(Deaths ~ Cause + Category, df_plot_5, sum)
+p13 <- ggplot(df_plot_5, aes(x = reorder(Cause, Deaths), y = Deaths, fill = Category)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = cols) +
+  geom_text(aes(label = format_numbers(Deaths)), hjust = -0.1, size = 3) +
+  labs(title = paste("Total Deaths by Cause for"), fill = "Category",x = "", y = "Total deaths") +
+  scale_y_continuous(limits = c(0, max(df_plot_5$Deaths) * 1.2)) +
+  plot_theme() +
+  theme(legend.position = "bottom") 
+
+df_plot_6 <- df_shiny_long
+df_plot_6 <- aggregate(Deaths ~ Category, df_plot_6, sum)
+p14 <- ggplot(df_plot_6, aes(x = reorder(Category, Deaths), y = Deaths, fill = Category)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = cols) +
+  geom_text(aes(label = format_numbers(Deaths)), hjust = -0.1, size = 3) +
+  labs(title = paste("Total Deaths by Category"),x = "", y = "Total deaths") +
+  scale_y_continuous(limits = c(0, max(df_plot_6$Deaths) * 1.2)) +
+  plot_theme() +
+  theme(legend.position = "bottom") 
+
+grid.arrange(p13, p14, ncol=2)
+```
+
+**Bar Plot of Total Deaths by Cause**: shows the total number of deaths
+attributed to 17 specific causes. High Systolic Blood Pressure is the
+leading cause for 255.41 million deaths. Tobacco use and Air Pollution
+also has a significant impact. Other major causes include Dietary
+factors, High Fasting Plasma Glucose, and Unsafe Water.
+
+**Bar Plot of Total Deaths by Category**: summarizes deaths by three
+major categories: Behavioral, Environmental, and Metabolic risks.
+Behavioral risks has the highest number of deaths, with approximately
+677.32 million deaths, suggesting that changing health behaviors (such
+as reducing tobacco use or improving diet quality) could significantly
+lower global death rates. Metabolic risks are the next major
+contributor, with around 499.52 million deaths. Environmental risks,
+while comparatively lower, still has 321.27 million deaths, indicating
+the importance of addressing environmental health concerns.
+
+#### 2.5.3 Correlation Analysis
+
+```{r fig.width=5, fig.height=5}
+df_plot_7 <- df_shiny
+cols <- c("Africa" = "#1B9E77", "Europe" = "#7570B3", "Asia" = "#D95F02", 
+              "Americas" = "#E7298A", "Oceania" = "#66A61E")
+df_plot_7$Behavioral <- log(df_plot_7$Behavioral)
+df_plot_7$Metabolic <- log(df_plot_7$Metabolic)
+ggplot(df_plot_7, aes(x = Behavioral, y = Metabolic, color = Continent)) +
+      geom_point(alpha = 0.25) +
+      labs(title = paste("Behavioral and Metabolic"), x = "Behavioral", y = "Metabolic") +
+      plot_theme() +
+      scale_color_manual(values = cols) + 
+      theme(legend.position = "bottom")
+```
+
+**Scatterplot**: shows the relationship between Behavioral and
+Metabolic risk factors across different continents.(Log transformed).
+There is a strong positive correlation between behavioral and metabolic
+risks, indicating that countries with higher behavioral risk factors
+(e.g., tobacco use, poor diet) also tend to have higher metabolic risk
+factors (e.g., high blood pressure, high BMI). The color indicates that
+the trend holds globally with slight variations among regions. This
+positive correlation suggests that changing behavioral risk factors
+could help reduce metabolic risks as well.
+
+## 3 Classification
+
+This section focuses on building machine learning classification models
+to predict the death rate (high/low) for each country. Decision Tree is
+used to understand the feature importance.KNN is used to identify the optimal k value and compare its performance with the Decision Tree. LIME is to interpret
+feature contributions and shows the model's transparency.
+
+Three features sets are selected to compare the performance of two
+classifiers:
+
+1.  **Feature set1**: 17 log-scaled variables (refer to Section 2.4.2
+    Data Transformation)
+
+2.  **Feature set2**: 12 selected variables obtained from the single
+    variable models (refer to Section 3.2 Single Variable Modeling)
+
+3.  **Feature set3**: 9 important variables obtained from the PCA.
+    (refer to Section 3.3 PCA)
+
+**Disclaimer**: The implementation in Chapter 3 (Classification) and Chapter 4 (Clustering)
+is based on lecture materials and lab exercises. ChatGPT-4 was used as a learning aid
+to clarify concepts, understand R library usage, and support code interpretation
+(e.g., PCA implementation and KNN hyperparameter tuning with `train()`).
+
+### 3.1 Model Preparation
+
+#### 3.1.1 Target Variables
+
+**Death Rate Category**
+
+The target variable is created by using the normalized death rate and
+the binary classification is based on whether the value is above or
+below the median.
+
+```{r}
+df_new_2 <- mutate(df_new_2, Death_Rate_Cat = ifelse(Death_Rate_Normalized > median(Death_Rate_Normalized),"1","0"))
+
+d <- subset(df_new_2, select = -c(GDP, Population, Total_Deaths, Death_Rate, Death_Rate_Normalized))
+outcome <- 'Death_Rate_Cat'
+pos <- '1'
+
+death_cat_avg <- aggregate(Death_Rate_Cat ~ Country, df_new_2, FUN = function(x) sum(x == '1') / 30)
+```
+
+#### 3.1.2 Split Data
+
+The dataset is split into training, calibration, and testing subsets.
+
+```{r}
+# split data
+set.seed(4009)
+d$rgroup <- runif(nrow(d))
+dTrainAll <- subset(d, rgroup<=0.9)
+dTest <- subset(d, rgroup > 0.9)
+useForCal <- rbinom(n=dim(dTrainAll)[[1]], size=1, prob=0.1) > 0
+dCal <- subset(dTrainAll, useForCal)
+dTrain <- subset(dTrainAll,!useForCal)
+cat('Training, calibration and testing set sizes are:', nrow(dTrain), ',', nrow(dCal), 'and', nrow(dTest))
+```
+
+```{r}
+model_data_dir <- "../data/model_inputs"
+
+if (!dir.exists(model_data_dir)) {
+  dir.create(model_data_dir, recursive = TRUE)
+}
+
+write.csv(dTrain, file.path(model_data_dir, "dTrain.csv"), row.names = FALSE)
+write.csv(dCal, file.path(model_data_dir, "dCal.csv"), row.names = FALSE)
+write.csv(dTest, file.path(model_data_dir, "dTest.csv"), row.names = FALSE)
+write.csv(df_new_2, file.path(model_data_dir, "dTransformed.csv"), row.names = FALSE)
+```
+
+
+#### 3.1.3 Feature Variables
+
+The features are divided into categorical and numerical variables. The
+17 log-scaled numeric variables is used as feature set1.
+
+```{r}
+vars <- setdiff(colnames(dTrainAll), c(outcome,'rgroup','Country'))
+catVars <- vars[sapply(dTrainAll[,vars], class) %in% c('factor','character')]
+catVars
+numericVars <- vars[sapply(dTrainAll[,vars], class) %in% c('numeric','integer')]
+numericVars
+```
+
+### 3.2 Single Variable Models
+
+This section evaluates the predictive power of individual variables
+before combining them into multivariate models, with the goal of
+identifying strong standalone predictors of high vs. low death rates.
+
+#### 3.2.1 Null model
+
+The null model is used as a baseline to evaluate the performance of
+other models. It predicts the death rate (high/low) based on the
+proportion of positive cases in the training data. The log likelihood
+and AUC are calculated for this null model for further comparisons.
+
+```{r}
+logLikelihood <- function(ypred, ytrue,epsilon=1e-6) {
+  sum(ifelse(ytrue, log(ypred+epsilon), log(1-ypred+epsilon)), na.rm=T)
+}
+(Npos <- sum(dTrain[,outcome] == 1))
+pred.Null <- Npos / nrow(dTrain)
+cat("Proportion of outcome == 1 in dTrain:", pred.Null)
+```
+
+```{r}
+calcAUC <- function(ypred, ytrue) {
+    perf <- performance(prediction(ypred, ytrue), 'auc')
+    as.numeric(perf@y.values)
+}
+
+TP <- 0
+TN <- sum(dCal[, outcome] == "0")
+FP <- 0
+FN <- sum(dCal[, outcome] == "1")
+cat("nrow(dCal):", nrow(dCal), "TP:", TP, "TN:", TN, "FP:", FP, "FN:", FN)
+(accuracy <- (TP + TN) / nrow(dCal))
+(precision <- TP/(TP + FP))
+pred.Null <- rep(pred.Null, nrow(dCal)) 
+
+(AUC <- calcAUC(pred.Null, dCal[,outcome]))
+```
+
+```{r}
+logNull <- logLikelihood(sum(dCal[,outcome]==pos)/nrow(dCal), dCal[,outcome]==pos)
+cat("The log likelihood of the Null model is:", logNull)
+```
+
+#### 3.2.2 Categorical Variables
+
+To examine the predictive ability of each categorical variable,
+single-variable models are created.
+
+**Prediction**: For each categorical variable, a model `mkPredC()`
+predicts the high death rate based on the levels of that categorical
+variable.
+
+**Evaluation**: Each model is examined using the Area Under the Curve
+**(AUC)** on both training and calibration sets. Variables that has
+significant **reduction in deviance** compared to the null models are
+selected.
+
+```{r}
+plot_roc <- function(predcol, outcol, colour_id, label, overlaid=F) {
+    ROCit_obj <- rocit(score = predcol, class = outcol == "1")
+    par(new = overlaid)
+    plot(ROCit_obj, col = c(colour_id,"black"), main = "", xlab = "", ylab = "",
+         legend = FALSE, YIndex = FALSE, values = FALSE)
+    lines(ROCit_obj$fpr, ROCit_obj$tpr, col = colour_id, lwd = 2, type = "b")
+}
+
+
+# perform single variable prediction for a given categorical column
+mkPredC <- function(outCol, varCol, appCol) {
+  pPos <- sum(outCol==pos)/length(outCol)
+  naTab <- table(as.factor(outCol[is.na(varCol)]))
+  pPosWna <- (naTab/sum(naTab))[pos]
+  vTab <- table(as.factor(outCol), varCol)
+  pPosWv <- (vTab[pos,]+1.0e-3*pPos)/(colSums(vTab)+1.0e-3)
+  pred <- pPosWv[appCol]
+  pred[is.na(appCol)] <- pPosWna
+  pred[is.na(pred)] <- pPos
+  pred
+}
+
+for (v in catVars) {
+  pi <- paste('pred', v, sep='')
+  dTrain[,pi] <- mkPredC(dTrain[,outcome], dTrain[,v], dTrain[,v])
+  dCal[,pi] <- mkPredC(dTrain[,outcome], dTrain[,v], dCal[,v])
+  dTest[,pi] <- mkPredC(dTrain[,outcome], dTrain[,v], dTest[,v])
+}
+
+for(v in catVars) {
+  pi <- paste('pred', v, sep='')
+  aucTrain <- calcAUC(dTrain[,pi], dTrain[,outcome])
+  if (aucTrain >= 0.1) {
+    aucCal <- calcAUC(dCal[,pi], dCal[,outcome])
+    print(sprintf(
+      "%s: trainAUC: %4.3f; calibrationAUC: %4.3f",
+      pi, aucTrain, aucCal))
+  }
+}
+
+selCatVars <- c()
+minDrop <- 30 
+for (v in catVars) {
+  pi <- paste('pred', v, sep='')
+  devDrop <- 2*(logLikelihood(dCal[,pi], dCal[,outcome]==pos) - logNull)
+  if (devDrop >= minDrop) {
+    cat(sprintf("%6s, deviance reduction: %g\n", v, devDrop))
+    selCatVars <- c(selCatVars, pi)
+  }
+}
+```
+
+AUC: predCode: Train AUC = 0.973, Calibration AUC = 0.965 predContinent:
+Train AUC = 0.776, Calibration AUC = 0.776
+
+Deviance reduction: Code: Deviance reduction = 474.918 Continent:
+Deviance reduction = 139.232
+
+#### 3.2.3 Numerical Variables
+
+Next step is to evaluate each numerical variable.
+
+**Prediction**: function `mkPredN()` is used to convert numerical
+variables into categorical bins, and the same method `mkPredC` is used
+to predict the outcomes.
+
+**Evaluation**: Same method as categorical variables (**AUC and deviance
+reduction**)
+
+```{r}
+mkPredN <- function(outCol, varCol, appCol) {
+  cuts <- unique(as.numeric(
+    quantile(varCol, probs=seq(0, 1, 0.1), na.rm=T)))
+  varC <- cut(varCol, cuts)
+  appC <- cut(appCol, cuts)
+  mkPredC(outCol, varC, appC)
+}
+
+for (v in numericVars) {
+  pi <- paste('pred', v, sep='')
+  dTrain[,pi] <- mkPredN(dTrain[,outcome], dTrain[,v], dTrain[,v])
+  dTest[,pi] <- mkPredN(dTrain[,outcome], dTrain[,v], dTest[,v])
+  dCal[,pi] <- mkPredN(dTrain[,outcome], dTrain[,v], dCal[,v])
+}
+
+for(v in numericVars) {
+  pi <- paste('pred', v, sep='')
+  aucTrain <- calcAUC(dTrain[,pi], dTrain[,outcome])
+  if (aucTrain >= 0.1) {
+    aucCal <- calcAUC(dCal[,pi], dCal[,outcome])
+    print(sprintf(
+      "%s: trainAUC: %4.3f; calibrationAUC: %4.3f",
+      pi, aucTrain, aucCal))
+  }
+}
+```
+
+```{r}
+selNumVars <- c()
+minDrop <- 25 
+for (v in numericVars) {
+  pi <- paste('pred', v, sep='')
+  devDrop <- 2*(logLikelihood(dCal[,pi], dCal[,outcome]==pos) - logNull)
+  if (devDrop >= minDrop) {
+    cat(sprintf("%6s, deviance reduction: %g\n", v, devDrop))
+    selNumVars <- c(selNumVars, pi)
+  }
+}
+```
+
+```{r}
+(selVars <- c(selCatVars, selNumVars))
+```
+
+#### 3.2.4 Selected Variables
+
+```{r fig.asp=1}
+col = c(brewer.pal(n = 8, name = "Dark2"),brewer.pal(n = 11, name = "RdBu"))
+n = 1
+labels = vector("character", length(selVars))
+cols = vector("numeric", length(selVars))
+
+for (v in selVars) {
+    plot_roc(dTest[, v], dTest[, outcome], colour_id = col[n], label = v, overlaid = T)
+    labels[n] <- v
+    cols[n] <- col[n]
+    n = n + 1
+}
+
+legend("bottomright", legend = labels, col = cols, lwd = 2, cex = 0.8, merge = TRUE)
+title("ROC for Select Variables on the Test Set")
+```
+
+```{r}
+cat("Performance of the top performing single variables on the test set:")
+for (v in selVars) {
+  # retrieve the original variable name (character location 5 onward)
+  orig_v <- substring(v, 5)
+  cat(sprintf("Variable %6s: AUC = %g\n", orig_v, calcAUC(dTest[,v], dTest[,outcome]==pos)))
+}
+```
+
+The ROC curve for each selected variable to visualize their predictivity
+on the test set. In the numerical variables, the following are the
+best-performing ones based on the AUC: Vitamin A deficiency: AUC =
+0.8627 Iron deficiency: AUC = 0.8405 Breastfeeding: AUC = 0.8608 Child
+growth: AUC = 0.8228 Unsafe water: AUC = 0.8155 These variables show
+higher AUC values compared to others. Among these, Vitamin A deficiency
+has the highest AUC, making it the best individual numerical predictor.
+
+Overall, both categorical (Code, Continent) and selected numerical
+risk factors demonstrate strong standalone predictive power. These
+variables are carried forward into Feature Set 2 for multivariate
+modeling.
+
+#### 3.2.5 PCA Feature Selections
+
+PCA is applied to assist feature selection by identifying dominant
+patterns among highly correlated numerical variables and reducing
+redundancy prior to multivariate modeling. By using PCA, the
+aim is to reduce the dimensionality of the dataset and maintain the
+maximum amount of variance.
+
+1.  **PCA analysis**: use `prcomp()` to perform PCA on scaled numerical
+    variables. PCA transforms the original features into new components
+2.  **Extract important features**: use loadings_matrix to identify the
+    contributions of each feature to principal components. This
+    iterative process is to sum the variance explained by each component
+    until a cumulative variance threshold (90%).
+3.  **Selected variables**: for each component in the cumulative
+    variance, the variable with absolute loadings greater than 0.25 are
+    selected. These 9 important features is used as **feature set3**.
+
+Note: The PCA implementation was adapted with assistance from ChatGPT-4
+to clarify the feature selection logic and loading-based interpretation.
+
+```{r}
+pca_result <- prcomp(d[, factors], scale. = TRUE)
+```
+
+```{r}
+loadings_matrix <- pca_result$rotation
+important_features <- c()
+cumulative_threshold <- 0.9
+
+for (i in 1:ncol(loadings_matrix)) {
+  cumulative_variance <- sum((pca_result$sdev[1:i])^2) / sum((pca_result$sdev)^2)
+  if (cumulative_variance > cumulative_threshold) break
+  
+  pc <- paste0("PC", i)
+  important_features <- unique(c(important_features, rownames(loadings_matrix)[abs(loadings_matrix[, pc]) > 0.25]))
+}
+
+important_features
+```
+
+```{r}
+vars1 <- numericVars
+vars2 <- selNumVars
+vars3 <- important_features
+cat('Number of features used in tmodel1 is:', length(vars1))
+## Number of features used in tmodel1 is: 17
+cat('Number of features used in tmodel2 is:', length(vars2))
+## Number of features used in tmodel2 is: 12
+cat('Number of features used in tmodel4 is:', length(vars3))
+## Number of features used in tmodel4 is: 9
+```
+
+
+### 3.3 Decision Tree Classifier
+
+This section evaluates the performance of a Decision Tree classifier
+using three different feature sets introduced earlier.
+
+#### 3.3.1 Functions
+
+Functions set up for model implementation and evaluation.
+
+```{r}
+panderOpt <- function(){
+  library(pander)
+  panderOptions("plain.ascii", TRUE)
+  panderOptions("keep.trailing.zeros", TRUE)
+  panderOptions("table.style", "simple")
+}
+performanceMeasures <- function(ytrue, ypred, model.name = "model", threshold=0.5) {
+   auc <- calcAUC(ypred, ytrue)
+   dev.norm <- -2 * logLikelihood(ytrue, ypred)/length(ypred)
+   cmat <- table(actual = ytrue, predicted = ypred >= threshold)
+   accuracy <- sum(diag(cmat)) / sum(cmat)
+   precision <- cmat[2, 2] / sum(cmat[, 2])
+   recall <- cmat[2, 2] / sum(cmat[2, ])
+   f1 <- 2 * precision * recall / (precision + recall)
+   
+   list(perf = data.frame(model = model.name, auc = auc, precision = precision,
+                          recall = recall, f1 = f1, dev.norm = dev.norm),
+        confusion_matrix = cmat)
+}
+pretty_perf_table <- function(model, xtrain, ytrain,
+                              xcalib, ycalib, xtest, ytest, threshold=0.5) {
+   panderOpt()
+   perf_justify <- "lrrrrr" 
+   pred_train <- predict(model, newdata=xtrain)
+   pred_calib <- predict(model, newdata=xcalib) 
+   pred_test <- predict(model, newdata=xtest)
+   trainperf_df <- performanceMeasures(
+      ytrain, pred_train, model.name="training", threshold=threshold)
+   calibperf_df <- performanceMeasures(
+      ycalib, pred_calib, model.name="calibration", threshold=threshold) 
+   testperf_df <- performanceMeasures(
+      ytest, pred_test, model.name="test", threshold=threshold)
+   perftable <- rbind(trainperf_df$perf, calibperf_df$perf, testperf_df$perf)
+   pandoc.table(perftable, justify = perf_justify)
+}
+
+pretty_test <- function(model, xtest, ytest, threshold=0.5) {
+   panderOpt()
+   perf_justify <- "lrrrrr" 
+   pred_test <- predict(model, newdata=xtest)
+   testperf <- performanceMeasures(ytest, pred_test, model.name="test", threshold=threshold)
+   pandoc.table(testperf$perf, justify = perf_justify)
+}
+
+pretty_cmat <- function(model, xtest, ytest, threshold=0.5) {
+   pred_test <- predict(model, newdata=xtest)
+   testperf <- performanceMeasures(ytest, pred_test, model.name="test", threshold=threshold)
+   pandoc.table(testperf$confusion_matrix, caption = "Confusion Matrix for Test Set")
+}
+
+# PLOTS
+# single model ROC
+plot_roc_model <- function(model, dTest, dTrain, dCal, outcome, pos){
+  pred_test_roc <- predict(model, newdata = dTest)
+  pred_train_roc <- predict(model, newdata = dTrain)
+  pred_cal_roc <- predict(model, newdata = dCal)
+  roc_1 <- rocit(score = pred_test_roc, class = dTest[[outcome]] == pos)
+  roc_2 <- rocit(score = pred_train_roc, class = dTrain[[outcome]] == pos)
+  roc_3 <- rocit(score = pred_cal_roc, class = dCal[[outcome]] == pos)
+  cols = brewer.pal(n = 3, name = "Dark2")
+  plot(roc_1, col = c(cols[1],"black"), lwd = 3, legend = FALSE, YIndex = FALSE, values = TRUE, asp = 1)
+  lines(roc_2$TPR ~ roc_2$FPR, lwd = 3, col = c(cols[2],"black"), asp = 1)
+  lines(roc_3$TPR ~ roc_3$FPR, lwd = 3, col = c(cols[3],"black"), asp = 1)
+  legend("bottomright", col = c(cols, "black"),
+         legend = c("Test Data", "Training Data", "Calibration Data", "Null Model"), lwd = 2)
+  title("ROC for Model on the Test, training and Calibration Data")
+}
+
+# multiple models ROC
+plot_roc_new <- function(ypred, ytrue, legend.text="", ...) {
+    cols = brewer.pal(n = 4, name = "Dark2")
+    colour_id <- 1
+    roc <- rocit(score=ypred, class=ytrue)
+    plot(roc, col = c(cols[colour_id], "black"), lwd = 3,
+         legend = FALSE, YIndex = FALSE, values = TRUE, asp = 1,
+         cex.lab=3, cex.axis=2, cex.main=3)
+
+    # Process additional models
+    additional_args <- list(...)
+    num_args <- length(additional_args)
+
+    for (i in seq(1, num_args, by = 2)) {
+        colour_id <- colour_id + 1
+        ypredi <- additional_args[[i]]
+        ytruei <- additional_args[[i + 1]]
+        roc <- rocit(score=ypredi, class=ytruei)
+        lines(roc$TPR ~ roc$FPR, lwd = 3,
+              col = c(cols[colour_id], "black"), asp = 1,
+              cex.lab=3, cex.axis=2, cex.main=3)
+    }
+
+    if (!any(legend.text == "")) {
+        legend("bottomright", col = c(cols[1:colour_id],"black"),
+        c(legend.text, "Null model"), lwd = 2)
+    }
+}
+```
+
+#### 3.3.2 Build Models
+
+1.  Feature set1: 17 log-scaled variables
+
+```{r}
+tmodel <- rpart(as.formula(paste("Death_Rate_Cat >0 ~", paste(vars1, collapse = " + "))), data = dTrain)
+rpart.plot(tmodel)
+# summary(tmodel)
+```
+
+```{r}
+pretty_perf_table(tmodel, dTrain[vars1], dTrain[,outcome]==pos,
+                  dCal[vars1], dCal[,outcome]==pos,
+                  dTest[vars1], dTest[,outcome]==pos)
+```
+
+```{r fig.asp=1}
+plot_roc_model(tmodel, dTest, dTrain, dCal, outcome, pos)
+```
+
+Feature Set 1's Decision Tree performs well with high AUC, precision,
+and recall across training, calibration, and test sets, indicating good
+generalization and model stability.
+
+2.  Feature set2 use only the reprocessed numerical variables that
+    achieved high AUC scores.
+
+```{r}
+tmodel2 <- rpart(as.formula(paste("Death_Rate_Cat >0 ~", paste(vars2, collapse = " + "))), data = dTrain)
+rpart.plot(tmodel2)
+```
+
+```{r }
+pretty_perf_table(tmodel2, dTrain[vars2], dTrain[,outcome]==pos,
+                  dCal[vars2], dCal[,outcome]==pos,
+                  dTest[vars2], dTest[,outcome]==pos)
+```
+
+```{r fig.asp=1}
+plot_roc_model(tmodel2, dTest, dTrain, dCal, outcome, pos)
+```
+
+Feature set 2 had an AUC of 0.897 on the test set. The model performed
+well but was slightly less accurate compared to feature set 1.
+
+3.  Feature set3 important variables obtained from the pca.
+
+```{r}
+tmodel3 <- rpart(as.formula(paste("Death_Rate_Cat >0 ~", paste(vars3, collapse = " + "))), data = dTrain)
+rpart.plot(tmodel3)
+```
+
+```{r}
+pretty_perf_table(tmodel3, dTrain[vars3], dTrain[,outcome]==pos,
+                  dCal[vars3], dCal[,outcome]==pos,
+                  dTest[vars3], dTest[,outcome]==pos)
+```
+
+```{r fig.asp=1}
+plot_roc_model(tmodel3, dTest, dTrain, dCal, outcome, pos)
+```
+
+Feature set 3 achieves a strong balance between predictive performance
+and model efficiency, using fewer variables while maintaining comparable
+AUC and precision to the full feature set.
+
+#### 3.3.3 Model Performance
+
+```{r}
+pretty_test(tmodel, dTest[vars1], dTest[,outcome]==pos)
+```
+
+```{r fig.asp=1}
+tmodel.pred <- predict(tmodel, newdata=dTest[vars1], )
+tmodel2.pred <- predict(tmodel2, newdata=dTest[vars2])
+tmodel3.pred <- predict(tmodel3, newdata=dTest[vars3])
+dTest.gt <- dTest[,outcome] == pos
+plot_roc_new(legend.text=c("tmodel", "tmodel2", "tmodel3"),
+             tmodel.pred, dTest.gt, tmodel2.pred, dTest.gt,
+             tmodel3.pred, dTest.gt)
+```
+
+Tmodel1 and tmodel3 perform better than tmodel2. Tmodel3 is efficient,
+using only 9 variables compared to tmodel1's 17, while achieving similar
+results.
+
+```{r}
+print(tmodel$variable.importance)
+```
+
+```{r}
+print(tmodel2$variable.importance)
+```
+
+```{r}
+print(tmodel3$variable.importance)
+```
+
+From the variable importance of three different feature sets:
+
+1.  **Feature set1**: Vitamin A deficiency, Unsafe water, and Child
+    growth are the most important features
+2.  **Feature set2**: Vitamin A deficiency and Breastfeeding are the key
+    variables, with Breastfeeding showing more importance than in
+    Feature Set 1
+3.  **Feature set3**: Low birth weight, High systolic blood pressure,
+    and Air pollution are most important, suggesting that these features
+    retain high predictive value after PCA
+
+### 3.4 KNN
+
+Another classifier K-Nearest Neighbors (KNN) is usred to compare with
+the decision tree models. The KNN classifier can provide another
+approach to predict the death rate category for each country.
+
+#### 3.4.1 Functions
+
+Functions set up for model implementation and evaluation.
+
+```{r}
+knnPredict <- function(df, knnTrain, knnCl, k) {
+  knnDecision <- knn(knnTrain, df, knnCl, k=k, prob=TRUE)
+  ifelse(knnDecision == TRUE,
+         attributes(knnDecision)$prob,
+         1 - attributes(knnDecision)$prob)
+}
+
+compare_perf_table <- function(model1, x, y, knnTrain, knnCl, nK, model1_name="Model 1", threshold=0.5) {
+  panderOpt()
+  perf_justify <- "lrrrrr"
+  pred1 <- predict(model1, newdata=x)
+  pred2 <- knnPredict(x, knnTrain, knnCl, nK)
+  perf1 <- performanceMeasures(y, pred1, model.name=model1_name, threshold=threshold)
+  perf2 <- performanceMeasures(y, pred2, model.name="KNN Model", threshold=threshold)
+  perftable <- rbind(perf1$perf, perf2$perf)
+  pandoc.table(perftable, justify = perf_justify, caption = "Performance Comparison for Two Models")
+}
+
+compare_cmat <- function(model1, x, y, knnTrain, knnCl, nK, model1_name="Model 1", threshold=0.5) {
+  panderOpt()
+  pred1 <- predict(model1, newdata=x)
+  pred2 <- knnPredict(x, knnTrain, knnCl, nK)
+  cmat1 <- performanceMeasures(y, pred1, model.name=model1_name, threshold=threshold)$confusion_matrix
+  cmat2 <- performanceMeasures(y, pred2, model.name="KNN Model", threshold=threshold)$confusion_matrix
+  pandoc.table(cmat1, caption = paste("Confusion Matrix for", model1_name))
+  pandoc.table(cmat2, caption = "Confusion Matrix for KNN Model")
+}
+```
+
+#### 3.4.2 Find Best k
+
+To determine the best value of k for each feature set, the train() is
+used to test k from range 1:10 by cross-validation to find the best
+value. Note: ChatGPT was used to understand the implementation of the
+train() function.
+
+```{r}
+# feature sets1
+dTrain_sub1 <- dTrain[, c(vars1, outcome)]
+knnModel_1 <- train(
+     Death_Rate_Cat  ~ ., 
+     data = dTrain_sub1, 
+     method = "knn", 
+     trControl = trainControl(method = "cv"), 
+     tuneGrid = data.frame(k = 1:10) 
+)
+best_k1 <- knnModel_1$bestTune$k
+
+# feature sets2
+dTrain_sub2 <- dTrain[, c(vars2, outcome)]
+knnModel_2 <- train(
+     Death_Rate_Cat  ~ ., 
+     data = dTrain_sub2, 
+     method = "knn", 
+     trControl = trainControl(method = "cv"), 
+     tuneGrid = data.frame(k = 1:10) 
+)
+best_k2 <- knnModel_2$bestTune$k
+
+# feature sets3
+dTrain_sub3 <- dTrain[, c(vars3, outcome)]
+knnModel_3 <- train(
+     Death_Rate_Cat  ~ ., 
+     data = dTrain_sub3, 
+     method = "knn", 
+     trControl = trainControl(method = "cv"), 
+     tuneGrid = data.frame(k = 1:10) 
+)
+best_k3 <- knnModel_3$bestTune$k
+
+print(paste("Best k value for vars1:", best_k1))
+print(paste("Best k value for vars2", best_k2))
+print(paste("Best k value for vars3", best_k3))
+```
+
+Although cross-validation selected k = 1 for all three feature sets,
+this result suggests that the feature space is highly separable.
+However, k = 1 is known to be sensitive to noise and may lead to
+overfitting. Therefore, KNN results are interpreted as a benchmark
+comparison rather than a production-ready model.
+
+#### 3.4.3 Build Models
+
+Use the best k = 1 to build three KNN models for three feature sets.
+
+
+```{r}
+nK <- 1
+knn1.pred <- knnPredict(dTest[vars1], dTrain[vars1], dTrain[, outcome] == pos, nK)
+knn2.pred <- knnPredict(dTest[vars2], dTrain[vars2], dTrain[, outcome] == pos, nK)
+knn3.pred <- knnPredict(dTest[vars3], dTrain[vars3], dTrain[, outcome] == pos, nK)
+```
+
+```{r fig.asp=1}
+plot_roc_new(legend.text=c("knn1", "knn2", "knn3"),
+             knn1.pred, dTest.gt, knn2.pred, dTest.gt,
+             knn3.pred, dTest.gt)
+```
+
+The ROC plot above shows the performance of each model. All three KNN models show strong ROC performance on the test set. However, due to the use of k = 1, these results should be interpreted with caution.
+
+### 3.5 compare performance of two classifier
+
+1.  feature set1
+
+```{r}
+compare_perf_table(tmodel, dTest[vars1], dTest[, outcome] == pos, dTrain[,vars1], dTrain[, outcome] == pos, nK)
+compare_cmat(tmodel, dTest[vars1], dTest[, outcome] == pos, dTrain[,vars1], dTrain[, outcome] == pos, nK)
+```
+
+```{r fig.asp=1}
+plot_roc_new(legend.text=c("tmodel1", "KNN Model1"),
+             tmodel.pred, dTest.gt,
+             knn1.pred, dTest.gt)
+```
+
+Feature Set 1: KNN achieves higher AUC, precision, recall, and F1-score
+than the Decision Tree on the test set. However, this performance gain
+should be interpreted with caution, as the KNN model uses k = 1 and is
+more sensitive to local noise.
+
+2.  feature set2
+
+```{r}
+compare_perf_table(tmodel2, dTest[vars2], dTest[, outcome] == pos, dTrain[,vars2], dTrain[, outcome] == pos, nK)
+
+compare_cmat(tmodel2, dTest[vars2], dTest[, outcome] == pos, dTrain[,vars2], dTrain[, outcome] == pos, nK)
+```
+
+```{r fig.asp=1}
+plot_roc_new(legend.text=c("tmodel2", "KNN Model2"),
+             tmodel2.pred, dTest.gt,
+             knn2.pred, dTest.gt)
+```
+
+Feature Set 2: KNN shows improved recall and F1-score compared to the
+Decision Tree, suggesting stronger sensitivity to positive cases.
+Nevertheless, the Decision Tree remains more interpretable and stable
+across feature reductions.
+
+3.  feature set3
+
+```{r}
+compare_perf_table(tmodel3, dTest[vars3], dTest[, outcome] == pos, dTrain[,vars3], dTrain[, outcome] == pos, nK)
+
+compare_cmat(tmodel3, dTest[vars3], dTest[, outcome] == pos, dTrain[,vars3], dTrain[, outcome] == pos, nK)
+```
+
+```{r fig.asp=1}
+plot_roc_new(legend.text=c("tmodel3", "KNN Model3"),
+             tmodel3.pred, dTest.gt,
+             knn3.pred, dTest.gt)
+```
+
+Feature Set 3: KNN achieves the strongest overall ROC performance using
+a reduced feature set. This suggests that the selected features provide
+strong local separability. However, due to the non-parametric nature of
+KNN, the Decision Tree is preferred for interpretability and insight
+into feature importance.
+
+Overall, KNN consistently outperforms Decision Tree models in terms of
+predictive metrics across all feature sets. However, due to its reliance
+on k = 1 and lack of interpretability, KNN is used primarily as a
+performance benchmark. Decision Trees provide a better balance between
+predictive performance and interpretability, making them more suitable
+for insight-driven analysis.
+
+### 3.6 LIME
+
+Local interpretable model-agnostic explanations (LIME) is used to
+understand the predictions made by the decision tree model for feature
+set 3. Note: ChatGPT helps in adpating the rpart model to work with
+LIME.
+
+```{r}
+model_type.rpart <- function(x, ...) {
+  return("classification")
+}
+predict_model.rpart <- function(x, newdata, type, ...) {
+  pred <- predict(x, newdata, type = "prob")
+  return(as.data.frame(pred))
+}
+```
+
+```{r}
+dTrain_subset <- dTrain[, c(vars3, "Death_Rate_Cat"), drop = FALSE]
+dTrain_subset$Death_Rate_Cat <- as.factor(dTrain_subset$Death_Rate_Cat)
+tmodel.LIME <- rpart(as.formula(paste("Death_Rate_Cat ~", paste(vars3, collapse = " + "))), data = dTrain_subset)
+newdata <- dTest[, vars3, drop = FALSE]
+pred <- predict(tmodel.LIME, newdata, type = "prob")
+explainer <- lime(dTrain_subset[, vars3], model = tmodel.LIME, bin_continuous = TRUE, n_bins = 10)
+example.1 <- dTest[123, vars3, drop = FALSE]
+explanation.1 <- lime::explain(example.1, explainer, n_labels = 1, n_features = 4)
+plot_features(explanation.1)
+```
+
+In this example, features such as Low.birth.weight and
+Low.bone.mineral.density strongly support a high death rate prediction,
+resulting in a predicted probability of 0.95.
+
+```{r}
+example.2 <- dTest[456, vars3, drop = FALSE]
+explanation.2 <- lime::explain(example.2, explainer, n_labels = 1, n_features = 4)
+plot_features(explanation.2)
+```
+
+In the second example, certain features support while others contradict
+the predicted class, leading to a lower confidence prediction
+(probability = 0.77).
+
+The LIME explanations show that the selected features in feature set 3
+have intuitive and consistent contributions to individual predictions
+made by tmodel3. For the examined samples, the model relies on
+meaningful risk factors such as birth weight and metabolic indicators,
+suggesting that the decision logic is locally interpretable and aligned
+with domain expectations.
+
+**Conclusion**
+
+This chapter evaluated classification models for predicting country-level
+death rate categories using Decision Trees and KNN across three different
+feature sets. KNN consistently achieved higher predictive performance,
+serving as a strong benchmark model. However, its non-parametric nature
+and limited interpretability reduce its suitability for insight-driven
+analysis.
+
+Decision Trees provided competitive performance while offering clear
+feature importance and interpretable decision structures. The LIME
+analysis further demonstrated that the selected features in feature set
+3 contribute meaningfully to individual predictions, supporting the use
+of Decision Trees as a transparent and reliable model for understanding
+mortality risk patterns.
+
+## 4 Clustering
+
+Clustering is an unsupervised machine learning task used for exploratory
+data analysis. It groups observations into clusters based on similarity
+without predefined labels. In this section, two clustering methods,
+Hierarchical Clustering and k-means, are applied to analyze patterns
+across 17 aggregated risk factors for 199 countries. The objective is
+to identify meaningful country groupings and explore potential global
+health risk patterns.
+
+### 4.1 Data Preparation
+
+For the clustering task, the dataset is prepared to meet the following
+requirements:
+
+1. **Data aggregation**: Country-level aggregation is applied to
+   transform the data into a single record per country, representing
+   the cumulative burden of risk factors over time.
+
+2. **Normalization and scaling**: Log transformation is applied to the
+   17 numerical risk factors to reduce skewness, followed by
+   standardization to zero mean and unit variance. This ensures that
+   all features contribute equally to distance-based clustering
+   methods.
+
+The data preparation steps and implementation are adapted from lecture
+materials.
+
+```{r}
+# data aggregate
+d1 <- subset(df_new_1, select = c(numericVars, "Country"))
+df_sum <- aggregate(. ~ Country, data = d1, FUN = sum)
+nrow(df_sum)
+
+# log transformation
+df <- log_trans(df_sum, numericVars)
+scaled_df <- scale(df[,numericVars])
+
+# mean values of all columns
+attr(scaled_df, "scaled:center")
+
+# variances of all columns
+attr(scaled_df, "scaled:scale")
+```
+
+### 4.2 Hierarchical Clustering
+
+#### 4.2.1 Perform Hierarchical clustering
+
+**Calculate Distance**
+
+Use dist() to calculate pairwise Euclidean distance of the 199
+observations, resulting in 199 choose 2 = 19,701 unique pairs.
+
+```{r}
+dist <- dist(scaled_df, method="euclidean")
+```
+
+Use Ward's method with hclust(). It minimizes variance with each
+cluster.
+
+```{r}
+pfit <- hclust(dist, method="ward.D2")  
+```
+
+```{r}
+summary(pfit)
+```
+
+**Visualization: dendrogram**
+
+Plot the dendrogram to represent the nested clusters. Start with k=5 for
+preliminary analysis. To maintain readability, 20% of the countries were
+selected to be labeled.
+
+```{r}
+set.seed(4009)
+selected_labels <- sample(df$Country, size = length(df$Country) * 0.2)
+labels_sub <- ifelse(df$Country %in% selected_labels, df$Country, "")
+plot(pfit, labels=labels_sub, main="Cluster Dendrogram for Death Data", cex = 0.4)
+rect.hclust(pfit, k=5)   # 5 clusters
+```
+
+**Extract members of each cluster using `cutree()`**
+
+```{r}
+print_clusters <- function(df, groups, cols_to_print) {
+  Ngroups <- max(groups) 
+  for (i in 1:Ngroups) {
+    print(paste("cluster", i))
+    print(df[groups == i, cols_to_print])
+  }
+}
+
+print_clusters_countries <- function(df, groups) {
+  Ngroups <- max(groups) 
+  for (i in 1:Ngroups) {
+    countries_in_cluster <- df[groups == i, "Country"]
+    countries_str <- paste(countries_in_cluster, collapse = ", ")
+    print(paste("Cluster", i, ": ", countries_str))
+  }
+}
+group.5 <- cutree(pfit, k=5)
+# print_clusters(df, group.5, c(numericVars, "Country"))
+# print_clusters_countries(df, group.5)
+```
+
+#### 4.2.2 Visualising Clusters
+
+**Principal Component Analysis (PCA):** PCA used to transform high
+dimensional data into two dimensions for visualization.
+
+```{r}
+# calculate the principal components 
+princ <- prcomp(scaled_df) 
+# first two principal components
+nComp <- 2  
+# project scale_df onto the first 2 principal compoents to form a 2-column data frame
+project2D <- as.data.frame(predict(princ, newdata=scaled_df)[,1:nComp])
+```
+
+Combine the project2D with clustering results
+
+```{r}
+hclust.project2D <- cbind(project2D, cluster=as.factor(group.5), Country=df$Country)
+head(hclust.project2D)
+```
+
+**Visualizing Clusters**
+
+```{r}
+# finding convex hull
+find_convex_hull <- function(proj2Ddf, groups) {
+  do.call(rbind,
+          lapply(unique(groups),
+                 FUN = function(c) {
+                   f <- subset(proj2Ddf, cluster==c);
+                   f[chull(f),]
+                 }
+                )
+         )
+}
+hclust.hull <- find_convex_hull(hclust.project2D, group.5)
+cols <- brewer.pal(n = 5, name = "Dark2")
+
+plot_theme <- function(){
+  theme_minimal() +
+    theme(
+      text = element_text(size = 12),
+      plot.title = element_text(hjust = 0.5, face = "bold", margin = margin(b = 25)),
+      panel.border = element_rect(color = "black", fill = NA, size = 0.75),
+      panel.grid.major = element_line(color = "grey", linetype = "dashed", size = 0.2),
+      plot.margin = margin(t = 20, r = 20, b = 15, l = 20),
+      axis.ticks = element_line(color = "black")
+    )
+}
+
+
+ggplot(hclust.project2D, aes(x=PC1, y=PC2)) +
+  geom_point(aes(shape=cluster, color=cluster)) +
+  geom_text(aes(label='', color=cluster), hjust=0, vjust=1, size=3) +
+  geom_polygon(data=hclust.hull, aes(group=cluster, fill=as.factor(cluster)),
+               alpha=0.4, linetype=0) + 
+  scale_color_manual(values = cols) + 
+  scale_fill_manual(values = cols) +
+  ggtitle("Hierarchical Clustering with k = 5") +
+  plot_theme()
+```
+
+#### 4.2.3 Clustering Stability
+
+**`clusterboot()`** is used to find out how stable the clustering
+algorithm
+
+```{r}
+kbest.p <- 5
+cboot.hclust <- clusterboot(scaled_df, clustermethod=hclustCBI,
+			    method="ward.D2", k=kbest.p)
+
+summary(cboot.hclust$result)
+groups.cboot <- cboot.hclust$result$partition
+# print_clusters_countries(df, groups.cboot)
+```
+
+From the results, cluster 3 and cluster 4 show high stability.
+
+```{r}
+# cboot.hclust$bootbrd = number of times a cluster is desolved.
+(values <- 1 - cboot.hclust$bootbrd/100)   # large values here => highly stable
+cat("So clusters", order(values)[5], "and", order(values)[4], "are highly stable")
+```
+
+#### 4.2.4 Best K
+
+Functions below are used to find the best k value for both hierarchical
+clustering and kMeans
+
+```{r}
+sqr_euDist <- function(x, y) {
+    sum((x - y)^2)
+}
+
+wss <- function(clustermat) {
+    c0 <- colMeans(clustermat)
+    sum(apply( clustermat, 1, FUN=function(row) {sqr_euDist(row, c0)} ))
+}
+
+wss_total <- function(scaled_df, labels) {
+    wss.sum <- 0
+    k <- length(unique(labels))
+    for (i in 1:k) 
+        wss.sum <- wss.sum + wss(subset(scaled_df, labels == i))
+    wss.sum
+}
+
+tss <- function(scaled_df) {
+   wss(scaled_df)
+}
+
+CH_index <- function(scaled_df, kmax, method="kmeans") {
+    if (!(method %in% c("kmeans", "hclust"))) 
+        stop("method must be one of c('kmeans', 'hclust')")
+
+    npts <- nrow(scaled_df)
+    wss.value <- numeric(kmax)
+    wss.value[1] <- wss(scaled_df)
+
+    if (method == "kmeans") {
+        # kmeans
+        for (k in 2:kmax) {
+            clustering <- kmeans(scaled_df, k, nstart=10, iter.max=100)
+            wss.value[k] <- clustering$tot.withinss
+        } 
+    } else {
+        # hclust
+        d <- dist(scaled_df, method="euclidean")
+        pfit <- hclust(d, method="ward.D2")
+        for (k in 2:kmax) {
+            labels <- cutree(pfit, k=k)
+            wss.value[k] <- wss_total(scaled_df, labels)
+        }
+    }
+    bss.value <- tss(scaled_df) - wss.value  
+    B <- bss.value / (0:(kmax-1))            
+    W <- wss.value / (npts - 1:kmax)       
+    data.frame(k = 1:kmax, CH_index = B/W, WSS = wss.value)
+}
+```
+
+**plot the CH index vs k**
+
+```{r}
+# calculate the CH criterion
+crit.df <- CH_index(scaled_df, 10, method="hclust")
+fig1 <- ggplot(crit.df, aes(x=k, y=CH_index)) +
+  geom_point() + geom_line(colour="#D95F02") + 
+  scale_x_continuous(breaks=1:10, labels=1:10) +
+  labs(y="CH index") + plot_theme()
+fig2 <- ggplot(crit.df, aes(x=k, y=WSS), color="#1B9E77") +
+  geom_point() + geom_line(colour="#1B9E77") + 
+  scale_x_continuous(breaks=1:10, labels=1:10) +
+  plot_theme()
+grid.arrange(fig1, fig2, nrow=1)
+```
+
+The CH index suggests k=2 or k=3 for optimal clustering, while the WSS
+indicates k=3 as the best choice. Combining these, k=3 is recommended.
+
+### 4.3 kMeans Clustering
+
+#### 4.3.1 Perform kMeans
+
+```{r}
+kbest.p <- 5
+# run kmeans with 5 clusters, 100 random starts, and 100 maximum iterations per run.
+kmClusters <- kmeans(scaled_df, kbest.p, nstart=100, iter.max=100)
+```
+
+**Centres and sizes of the 5 Clusters**
+
+```{r}
+kmClusters$centers
+kmClusters$size
+cat("Total of cluster sizes =", sum(kmClusters$size))
+cat("Total number of observations =", nrow(df))
+```
+
+**Extracted groups**
+
+```{r}
+groups <- kmClusters$cluster
+# print_clusters_countries(df, groups, c(numericVars, "Country"))
+```
+
+#### 4.3.2 Best K
+
+```{r}
+kmClustering.ch <- kmeansruns(scaled_df, krange=1:10, criterion="ch")
+kmClustering.ch$bestk
+kmClustering.asw <- kmeansruns(scaled_df, krange=1:10, criterion="asw")
+kmClustering.asw$bestk
+
+# Compare the CH values for kmeans() and hclust().
+print("CH index from kmeans for k=1 to 10:")
+print(kmClustering.ch$crit)
+
+print("CH index from hclust for k=1 to 10:")
+hclusting <- CH_index(scaled_df, 10, method="hclust")
+print(hclusting$CH_index)
+```
+
+**Code to plot CH and ASW against k**
+
+```{r}
+library(gridExtra)
+kmCritframe <- data.frame(k=1:10, ch=kmClustering.ch$crit, 
+                          asw=kmClustering.asw$crit)
+fig1 <- ggplot(kmCritframe, aes(x=k, y=ch)) +
+  geom_point() + geom_line(colour="#D95F02") + 
+  scale_x_continuous(breaks=1:10, labels=1:10) + 
+  labs(y="CH index") + theme(text=element_text(size=20)) +
+  plot_theme()
+fig2 <- ggplot(kmCritframe, aes(x=k, y=asw)) +  
+  geom_point() + geom_line(colour="#1B9E77") +
+  scale_x_continuous(breaks=1:10, labels=1:10) +
+  labs(y="ASW") + theme(text=element_text(size=20)) +
+  plot_theme()
+grid.arrange(fig1, fig2, nrow=1)
+```
+
+#### 4.3.3 Visualisation
+
+```{r}
+fig <- c()
+kvalues <- seq(2,5)
+for (k in kvalues) {
+  groups <- kmeans(scaled_df, k, nstart=100, iter.max=100)$cluster
+  kmclust.project2D <- cbind(project2D, cluster=as.factor(groups),
+                             Country=df$Country)
+  kmclust.hull <- find_convex_hull(kmclust.project2D, groups)
+  assign(paste0("fig", k),
+    ggplot(kmclust.project2D, aes(x=PC1, y=PC2)) +
+    geom_point(aes(shape=cluster, color=cluster)) +
+    geom_polygon(data=kmclust.hull, aes(group=cluster, fill=cluster),
+                 alpha=0.4, linetype=0) + 
+    labs(title = sprintf("k = %d", k)) + plot_theme()
+    ) 
+}
+```
+
+**Visualisation of clusterings from kmeans**
+
+```{r}
+grid.arrange(fig2, fig3, fig4, fig5, nrow=2)
+```
+
+### 4.4 Explanation
+
+#### 4.4.1 Importance of components
+
+-   PC1 captures a combination of metabolic, environmental, and behavioral risk factors, reflecting broad public health pressures.
+
+-   PC2 is primarily driven by nutritional and developmental risks, highlighting child and maternal health dimensions.
+
+```{r}
+summary(princ)
+loadings <- princ$rotation
+print(loadings[, 1:2])
+```
+
+#### 4.4.2 Hierarchical Clustering best K
+
+best k = 3
+
+```{r}
+group.3 <- cutree(pfit, k=3)
+hclust.project2D <- cbind(project2D, cluster=as.factor(group.3), Country=df$Country)
+hclust.hull <- find_convex_hull(hclust.project2D, group.3)
+cols <- brewer.pal(n = 3, name = "Dark2")
+ggplot(hclust.project2D, aes(x=PC1, y=PC2)) +
+  geom_point(aes(shape=cluster, color=cluster)) +
+  geom_text(aes(label='', color=cluster), hjust=0, vjust=1, size=3) +
+  geom_polygon(data=hclust.hull, aes(group=cluster, fill=as.factor(cluster)),
+               alpha=0.4, linetype=0) + 
+  scale_color_manual(values = cols) + 
+  scale_fill_manual(values = cols) +
+  ggtitle("Hierarchical Clustering with k = 3") +
+  plot_theme()
+```
+
+```{r}
+# print_clusters(df, group.3, c(numericVars, "Country"))
+# print_clusters_countries(df, group.3)
+```
+
+Merge with Death Data and calculate how many high death rate years
+
+```{r}
+merge_k2 <- merge(d, hclust.project2D, by = "Country")
+death_k2 <- aggregate(Death_Rate_Cat ~ cluster, data = merge_k2, FUN = function(x) sum(x == '1'))
+death_k2 %>% kable()
+```
+
+**Interpretation**
+
+-   Cluster1 (green)：This cluster has the most high death rate years at
+    1958, indicating major health challenges. It includes countries like
+    China, India, and the USA, which balance in environmental,
+    behavioral, and metabolic risks but face some nutritional
+    challenges.
+
+-   Cluster2 (orange): With 763 high death rate years, this cluster
+    manages health better than Cluster 1. High-income nations like
+    Australia and Canada, are good in lifestyle disease management but
+    facing child and maternal health issues.
+
+-   Cluster3 (purple): The lowest count of high death rate years at 264
+    shows that these countries have minimal health risks and effective
+    management. Smaller countries such as Luxembourg and Maldives, with
+    minimal health risks and strong developmental health.
+
+```         
+```
+
+#### 4.4.3 kMeans best K
+
+Using k = 2
+
+```{r}
+kmClusters.2 <- kmeans(scaled_df, 2, nstart=100, iter.max=100)
+groups.2 <- kmClusters.2 $cluster
+kmClusters.2 $centers
+kmClusters.2 $size
+cat("Total of cluster sizes =", sum(kmClusters.2 $size))
+cat("Total number of observations =", nrow(df))
+
+```
+
+```{r}
+kmclust.project2D <- cbind(project2D, cluster=as.factor(groups.2),Country=df$Country)
+kmclust.hull <- find_convex_hull(kmclust.project2D, groups.2) 
+ggplot(kmclust.project2D, aes(x=PC1, y=PC2)) +
+    geom_point(aes(shape=cluster, color=cluster)) +
+    geom_polygon(data=kmclust.hull, aes(group=cluster, fill=cluster),
+                 alpha=0.4, linetype=0) + 
+    scale_color_manual(values = cols) + 
+    scale_fill_manual(values = cols) + 
+    ggtitle("kMeans Clustering with k = 2") +
+    plot_theme()
+```
+
+-   Cluster 1: Higher Risks: Countries in this cluster have higher
+    values across multiple health risks, representing a widespread
+    challenge. Consists of 143 countries, showing a common pattern of
+    higher health risks.
+
+-   Cluster 2: Lower Risks: This cluster's countries show lower health
+    risk levels, indicating better health management. Smaller Cluster:
+    Includes 56 countries, suggesting these health advantages are less
+    common.
+
+Overall, hierarchical clustering revealed more granular health risk patterns across countries, while k-means clustering provided a clearer separation between high-risk and low-risk groups.
+The consistency between clustering results and death-rate classifications further supports the validity of the identified clusters.
+
+### 4.5 Conclusion
+
+### 4.5 Conclusion
+
+This chapter applied hierarchical clustering and k-means clustering to identify groups of countries with similar health risk profiles.  
+By evaluating different values of *k*, the analysis demonstrated how each clustering method reveals health patterns at different levels of granularity.
+
+Hierarchical clustering provided more detailed group structures, while k-means clustering offered a clearer separation between high-risk and low-risk countries.  
+These clustering results support data-driven insights that can inform targeted public health strategies.
+
+## 5 Conclusion
+
+This project explored global health risks and mortality patterns using exploratory data analysis and machine learning techniques.  
+EDA revealed key risk factors and global trends, highlighting major contributors to death rates across countries.
+
+Supervised learning models, including Decision Trees and k-Nearest Neighbors (KNN), were used to classify countries into high and low death-rate groups.  
+Among the tested feature sets, the PCA-based feature set performed particularly well, with KNN consistently outperforming Decision Trees.  
+LIME was applied to improve model interpretability by explaining individual predictions.
+
+Unsupervised clustering methods further identified groups of countries with similar health risk profiles, complementing the classification results and supporting targeted health planning.  
+Overall, this project demonstrates an end-to-end analytics and modelling pipeline in R and shows how data-driven methods can support public health insights and decision-making.
+
+## 6 Reference
+
+1.  **Lecture Materials**: [Lecture materials used in Chapters 3 and 4
+    for building machine learning models, University Course Materials,
+    2024].
+
+2.  ChatGPT (GPT-4, OpenAI, 2024) was used to assist with understanding R functions and implementation details for selected machine learning techniques.
+
+3.  World Health Organization (WHO). Death Data: Yearly number of deaths
+    in 228 entities from 1990 to 2019, covering various causes of death.
+    Provided in Project Instruction.
+
+4.  World Bank. Population Data: Total population by country over years.
+    Available at: <https://data.worldbank.org/indicator/SP.POP.TOTL>.
+
+5.  World Bank. GDP Data: GDP per capita (current US\$). Available at:
+    <https://data.worldbank.org/indicator/NY.GDP.PCAP.CD>.
+
+6.  Waring, E., Quinn, M., McNamara, A., Arino de la Rubia, E., Zhu, H.,
+    Lowndes, J., Ellis, S., & Stewart, H. M. (2022). *Skimr: Compact and
+    Flexible Summaries of Data* (R package version 2.1.5).
+    <https://doi.org/10.32614/CRAN.package.skimr.> Retrieved from
+    <https://CRAN.R-project.org/package=skimr>
+
+7.  Wickham, H. (2020). tidyr: Tidy Messy Data. R package version 1.1.2.
+    Available at [tidyr pivot_longer
+    documentation](%5Bhttps://tidyr.tidyverse.org/reference/pivot_longer.html).](<https://tidyr.tidyverse.org/reference/pivot_longer.html>).)
+
+8.  Arel-Bundock, V., Enevoldsen, N., Yetman, C. (2023). *countrycode:
+    Convert Country Names and Country Codes* (R package version 1.4.0).
+    Available at:
+    <https://cran.r-project.org/web/packages/countrycode/index.html>.
+
+9.  IHME, Global Burden of Disease (2024) – with minor processing by Our
+    World in Data. "Alcohol use" [dataset]. IHME, Global Burden of
+    Disease, "Global Burden of Disease - Risk Factors" [original data].

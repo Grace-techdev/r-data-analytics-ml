@@ -1,0 +1,19 @@
+# --- R / RStudio ---
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Logs & temp files ---
+*.log
+*.tmp
+*.bak
+*.swp
+
+# --- Shiny / R cache ---
+rsconnect/
+.cache/
